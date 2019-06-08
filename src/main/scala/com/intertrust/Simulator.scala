@@ -1,22 +1,26 @@
 package com.intertrust
 
-import akka.actor.{ActorSystem, Props}
-import com.intertrust.actors.AlertsActor
-import com.intertrust.parsers.{MovementEventParser, TurbineEventParser}
+import java.io.InputStream
 
-import scala.io.Source
+import akka.actor.{ActorSystem, Props}
+import com.intertrust.actors.EventEmitterActor
 
 object Simulator {
+
   def main(args: Array[String]): Unit = {
     val system = ActorSystem("simulator")
 
-    val alertsActor = system.actorOf(Props(classOf[AlertsActor]), "alerts")
+    val movementsStream: InputStream =
+      getClass.getResourceAsStream("/movements.csv")
+    val turbinesStream: InputStream =
+      getClass.getResourceAsStream("/turbines.csv")
 
-    val movementEvents = new MovementEventParser().parseEvents(Source.fromInputStream(getClass.getResourceAsStream("movements.cvs")))
-    val turbineEvents = new TurbineEventParser().parseEvents(Source.fromInputStream(getClass.getResourceAsStream("turbines.cvs")))
+    val eventEmitterActor =
+      system.actorOf(
+        Props(new EventEmitterActor(movementsStream, turbinesStream)),
+        "eventEmitterActor"
+      )
 
-    // TODO: Implement events processing that sends alerts to the `alertsActor`
-
-    system.terminate()
+    eventEmitterActor ! EventEmitterActor.Start
   }
 }

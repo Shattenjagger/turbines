@@ -18,5 +18,7 @@ class TurbineEventParser extends EventParser[TurbineEvent] {
 }
 
 object TurbineEventParser {
-  private val timestampFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.of("UTC"))
+  private val timestampFormat = DateTimeFormatter
+    .ofPattern("yyyy-MM-dd HH:mm:ss")
+    .withZone(ZoneId.of("UTC"))
 }
