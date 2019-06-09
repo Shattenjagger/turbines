@@ -62,10 +62,6 @@ class EventEmitterActor(val movementsStream: InputStream,
       log.info(
         s"Event emitter started with speed coefficient $speedCoefficient"
       )
-
-      //Staring child actor
-      stateActor ! StateActor.Start
-
       turbineEvents = new TurbineEventParser()
         .parseEvents(Source.fromInputStream(turbinesStream))
         .drop(state.consumedTurbineEvents)

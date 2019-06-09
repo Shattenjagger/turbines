@@ -293,6 +293,5 @@ object StateActor {
   case class UpdateStatus(timestamp: Instant)
 
   case object UpdateStatusDone
-  case object Start
   case object Cleanup
 }
