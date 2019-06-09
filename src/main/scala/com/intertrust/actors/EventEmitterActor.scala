@@ -28,8 +28,10 @@ class EventEmitterActor(val movementsStream: InputStream,
 
   val speedCoefficient: Int = ConfigFactory.load().getInt("speedCoefficient")
 
-  val stateActor: ActorRef =
+  // This is made to replace it with probe during test
+  def getStateActor: ActorRef =
     context.system.actorOf(Props(classOf[StateActor]), "stateActor")
+  val stateActor: ActorRef = getStateActor
 
   var movementEvents: Iterator[MovementEvent] = _
   var turbineEvents: Iterator[TurbineEvent] = _
@@ -54,6 +56,10 @@ class EventEmitterActor(val movementsStream: InputStream,
 
   override def postStop(): Unit = {
     log.info(s"Event emitter stopped")
+    shutdown()
+  }
+
+  def shutdown(): Unit = {
     context.system.terminate()
   }
 
