@@ -15,8 +15,10 @@ class StateActor extends PersistentActor with ActorLogging {
 
   override def persistenceId = "state-actor"
 
-  val alertsActor: ActorRef =
+  // This is made to replace it with probe during test
+  def getAlertsActor: ActorRef =
     context.system.actorOf(Props(classOf[AlertsActor]), "alerts")
+  val alertsActor: ActorRef = getAlertsActor
 
   var state = ActorState()
 
@@ -42,7 +44,7 @@ class StateActor extends PersistentActor with ActorLogging {
     case SnapshotOffer(_, snapshot: ActorState) =>
       log.info(s"Got recover $snapshot")
       state = snapshot
-    case s => log.info(s"Received state event $s")
+    case s => log.debug(s"Received state event $s")
   }
 
   def processStatusUpdate(timestamp: Instant): Unit = {
