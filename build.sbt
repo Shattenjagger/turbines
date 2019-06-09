@@ -12,5 +12,6 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-slf4j" % akkaVersion,
   "com.typesafe.akka" %% "akka-persistence" % akkaVersion,
   "ch.qos.logback" % "logback-classic" % "1.2.3",
+  "org.fusesource.leveldbjni" % "leveldbjni-all" % "1.8",
   "org.scalatest" %% "scalatest" % "3.0.5" % "test"
 )

@@ -11,9 +11,9 @@ object Simulator {
     val system = ActorSystem("simulator")
 
     val movementsStream: InputStream =
-      getClass.getResourceAsStream("/movements.csv")
+      getClass.getResourceAsStream("/movements_short.csv")
     val turbinesStream: InputStream =
-      getClass.getResourceAsStream("/turbines.csv")
+      getClass.getResourceAsStream("/turbines_short.csv")
 
     val eventEmitterActor =
       system.actorOf(

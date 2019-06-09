@@ -3,31 +3,24 @@ package com.intertrust.actors
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 
-import akka.actor.{Actor, ActorLogging, ActorRef, Props}
-import com.intertrust.protocol.{
-  Location,
-  Movement,
-  MovementAlert,
-  MovementEvent,
-  Turbine,
-  TurbineAlert,
-  TurbineEvent,
-  TurbineStatus
-}
+import akka.actor.{ActorLogging, ActorRef, Props}
+import akka.persistence.{PersistentActor, SnapshotOffer}
+import com.intertrust.protocol._
 
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 
-class StateActor extends Actor with ActorLogging {
+class StateActor extends PersistentActor with ActorLogging {
   import StateActor._
+
+  override def persistenceId = "state-actor"
 
   val alertsActor: ActorRef =
     context.system.actorOf(Props(classOf[AlertsActor]), "alerts")
 
-  var turbinesMap = mutable.HashMap.empty[String, TurbineState]
-  var personsMap = mutable.HashMap.empty[String, PersonState]
+  var state = ActorState()
 
-  override def receive: Receive = {
+  override def receiveCommand: Receive = {
     case t: UpdateStatus =>
       log.debug(s"Got update status message $t")
       processStatusUpdate(t.timestamp)
@@ -38,10 +31,22 @@ class StateActor extends Actor with ActorLogging {
     case a: MovementEvent =>
       log.debug(s"Got movement event $a")
       processMovementEvent(a)
+    case Cleanup =>
+      // Parent actor asked to make cleanup
+      log.info("Clearing the state")
+      state = ActorState()
+      saveState()
+  }
+
+  def receiveRecover: Receive = {
+    case SnapshotOffer(_, snapshot: ActorState) =>
+      log.info(s"Got recover $snapshot")
+      state = snapshot
+    case s => log.info(s"Received state event $s")
   }
 
   def processStatusUpdate(timestamp: Instant): Unit = {
-    val filteredTurbines: mutable.Map[String, TurbineState] = turbinesMap
+    val filteredTurbines: mutable.Map[String, TurbineState] = state.turbinesMap
       .filter {
         case (_, v) =>
           v.status == TurbineStatus.Broken && !v.secondNotificationSent
@@ -62,7 +67,7 @@ class StateActor extends Actor with ActorLogging {
             // We will fire it again if engineers will came to turbine and leave it in broken state
             // That's why we're keeping this flag here
             sendTurbineStillBrokenAfterVisitAlert(t.turbineId, timestamp)
-            turbinesMap.update(
+            state.turbinesMap.update(
               t.turbineId,
               TurbineState(
                 t.turbineId,
@@ -81,7 +86,7 @@ class StateActor extends Actor with ActorLogging {
               .compareTo(t.lastBroken) > 0) {
           // Here was no engineers after the turbine had broken, and there more than 4 hours passed
           sendTurbineBrokenMoreThanFourHoursAlert(t.turbineId, timestamp)
-          turbinesMap.update(
+          state.turbinesMap.update(
             t.turbineId,
             TurbineState(
               t.turbineId,
@@ -95,32 +100,36 @@ class StateActor extends Actor with ActorLogging {
         }
       }
     }
+
+    saveState()
   }
 
   def processTurbineEvent(a: TurbineEvent): Unit = {
-    if (turbinesMap.contains(a.turbineId)) {
+    if (state.turbinesMap.contains(a.turbineId)) {
       // We already have this turbine in our state, so basically need to update turbine status
 
-      if (turbinesMap(a.turbineId).status == TurbineStatus.Working && a.status == TurbineStatus.Broken) {
+      if (state
+            .turbinesMap(a.turbineId)
+            .status == TurbineStatus.Working && a.status == TurbineStatus.Broken) {
         // Status was switched from working to broken after this event, so we need to send an alert
 
         sendTurbineEnteredBrokenStateAlert(a.turbineId, a.timestamp)
-        turbinesMap(a.turbineId) = TurbineState(
+        state.turbinesMap(a.turbineId) = TurbineState(
           a.turbineId,
           a.status,
           a.timestamp,
           Instant.MIN,
-          turbinesMap(a.turbineId).engineers
+          state.turbinesMap(a.turbineId).engineers
         )
       } else {
         // We don't care about other turbine state transitions
-        turbinesMap(a.turbineId) = TurbineState(
+        state.turbinesMap(a.turbineId) = TurbineState(
           a.turbineId,
           a.status,
-          turbinesMap(a.turbineId).lastBroken,
-          turbinesMap(a.turbineId).lastEngineerExit,
-          turbinesMap(a.turbineId).engineers,
-          turbinesMap(a.turbineId).secondNotificationSent
+          state.turbinesMap(a.turbineId).lastBroken,
+          state.turbinesMap(a.turbineId).lastEngineerExit,
+          state.turbinesMap(a.turbineId).engineers,
+          state.turbinesMap(a.turbineId).secondNotificationSent
         )
       }
     } else {
@@ -131,7 +140,7 @@ class StateActor extends Actor with ActorLogging {
         // The first event status is broken for this turbine, so we need to send an alert
 
         sendTurbineEnteredBrokenStateAlert(a.turbineId, a.timestamp)
-        turbinesMap(a.turbineId) = TurbineState(
+        state.turbinesMap(a.turbineId) = TurbineState(
           a.turbineId,
           a.status,
           a.timestamp,
@@ -139,7 +148,7 @@ class StateActor extends Actor with ActorLogging {
           ListBuffer[String]()
         )
       } else
-        turbinesMap(a.turbineId) = TurbineState(
+        state.turbinesMap(a.turbineId) = TurbineState(
           a.turbineId,
           a.status,
           null,
@@ -147,11 +156,13 @@ class StateActor extends Actor with ActorLogging {
           ListBuffer[String]()
         )
     }
+
+    saveState()
   }
 
   def processMovementEvent(a: MovementEvent): Unit = {
-    if (personsMap.contains(a.engineerId)) {
-      val currentPersonState = personsMap(a.engineerId)
+    if (state.personsMap.contains(a.engineerId)) {
+      val currentPersonState = state.personsMap(a.engineerId)
       if (a.movement == Movement.Exit) {
         if (currentPersonState.location != a.location) {
           // Exiting from some location while supposed to be in another one. Need to send an alert
@@ -177,29 +188,31 @@ class StateActor extends Actor with ActorLogging {
         updateEngineerEnter(a)
       }
     }
+
+    saveState()
   }
 
   def updateEngineerEnter(a: MovementEvent): Unit = {
     assert(a.movement == Movement.Enter)
     if (a.location.isInstanceOf[Turbine])
       updateTurbineEngineerList(a)
-    personsMap(a.engineerId) = PersonState(a.engineerId, a.location)
+    state.personsMap(a.engineerId) = PersonState(a.engineerId, a.location)
   }
 
   def updateEngineerExit(a: MovementEvent): Unit = {
     assert(a.movement == Movement.Exit)
     if (a.location.isInstanceOf[Turbine])
       updateTurbineEngineerList(a)
-    personsMap(a.engineerId) = PersonState(a.engineerId, null)
+    state.personsMap(a.engineerId) = PersonState(a.engineerId, null)
   }
 
   def updateTurbineEngineerList(a: MovementEvent): Unit = {
     assert(a.location.isInstanceOf[Turbine])
     val location: Turbine = a.location.asInstanceOf[Turbine]
 
-    if (turbinesMap.contains(location.id)) {
+    if (state.turbinesMap.contains(location.id)) {
       // Going to update engineers list and if last one had exited then update last exited state
-      val currentTurbineState = turbinesMap(location.id)
+      val currentTurbineState = state.turbinesMap(location.id)
       val engineersList =
         if (a.movement == Movement.Exit)
           currentTurbineState.engineers -= a.engineerId
@@ -213,7 +226,7 @@ class StateActor extends Actor with ActorLogging {
             currentTurbineState.secondNotificationSent
           )
 
-      turbinesMap(location.id) = TurbineState(
+      state.turbinesMap(location.id) = TurbineState(
         currentTurbineState.turbineId,
         currentTurbineState.status,
         currentTurbineState.lastBroken,
@@ -222,6 +235,10 @@ class StateActor extends Actor with ActorLogging {
         secondNotificationSent
       )
     }
+  }
+
+  def saveState(): Unit = {
+    saveSnapshot(state)
   }
 
   def sendTurbineEnteredBrokenStateAlert(turbineId: String,
@@ -260,6 +277,11 @@ class StateActor extends Actor with ActorLogging {
 }
 
 object StateActor {
+  case class ActorState(turbinesMap: mutable.HashMap[String, TurbineState] =
+                          mutable.HashMap.empty[String, TurbineState],
+                        personsMap: mutable.HashMap[String, PersonState] =
+                          mutable.HashMap.empty[String, PersonState])
+
   case class TurbineState(turbineId: String,
                           status: TurbineStatus,
                           lastBroken: Instant,
@@ -271,4 +293,6 @@ object StateActor {
   case class UpdateStatus(timestamp: Instant)
 
   case object UpdateStatusDone
+  case object Start
+  case object Cleanup
 }
